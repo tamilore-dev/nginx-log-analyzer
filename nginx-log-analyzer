@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# Name:        nginx-log-analyzer.sh
+# Description: Shows the top N IPs, paths, status codes and user agents
+#              from an Nginx access log.
+# Usage:       ./nginx-log-analyzer.sh [log_file]   (default: nginx.log)
+# Input:       Prompts for N (Enter = 5), a whole number 1 or higher.
+# Output:      Four ranked lists to stdout.
+# Exit codes:  0 = success, 1 = invalid N or unreadable log.
+# Author:      tamilore-dev
+# Created:     2026-10-14
+# Notes:       Needs the "combined" log format. Read-only. Prompt waits
+#              for a person, so it will hang under cron.
+# Stop if the script is sourced instead of run
+
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+	echo "Error: run this script, do not source it." >&2
+	return 1
+fi
+
+# Exit on errors, unset variables, and failures inside pipes
+set -Eeuo pipefail
+
+# Split words on newline/tab only, not spaces
+IFS=$'\n\t'
+
+# Ask for N, validate it, then lock COUNTS
+read_count() {
+	local input
+	read -rp "How many top results? [5] " input
+	input="${input:-5}" # Enter alone = 5
+
+	[[ "$input" =~ ^[1-9][0-9]*$ ]] || {
+		echo "Enter a whole number, 1 or higher." >&2
+		exit 1
+	}
+	COUNTS=$input
+	readonly COUNTS
+}
+
+# Reads values from stdin, prints the top N by frequency
+top_n() {
+	printf '\nTop %d %s:\n' "$COUNTS" "$1"
+	sort | uniq -c | sort -nr |
+		# -v passes the Bash variable into awk; NR <= n replaces head
+		awk -v n="$COUNTS" 'NR <= n {
+			c = $1; $1 = ""; sub(/^ +/, "")  # split count from text
+			print $0 " - " c " requests"
+		}'
+}
+
+main() {
+	[[ -r "$LOG" ]] || {
+		echo "cannot read log: $LOG" >&2
+		exit 1
+	}
+	awk '{print $1}' "$LOG" | top_n "IP addresses with the most requests"
+	awk '{print $7}' "$LOG" | top_n "requested paths"
+	awk '{print $9}' "$LOG" | top_n "response status codes"
+	awk -F'"' '{print $(NF-1)}' "$LOG" | top_n "user agents" # last quoted field
+}
+
+main "$@"
